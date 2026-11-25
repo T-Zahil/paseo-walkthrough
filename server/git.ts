@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { execCommand } from "@getpaseo/plugin/server";
-import type { ScopeKind } from "../shared/walkthrough";
+import type { ScopeInfo, ScopeKind } from "../shared/walkthrough";
 
 export interface DiffLine {
   t: "add" | "del" | "ctx";
@@ -58,7 +58,9 @@ const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 export interface ResolvedScope {
   scope: ScopeKind;
+  /** English description, for prompts. */
   label: string;
+  info: ScopeInfo;
   /** What the diff is taken against. */
   base: string;
   /** Second side of the diff; null means the working tree. */
@@ -71,27 +73,70 @@ export interface ResolvedScope {
 export async function resolveScope(cwd: string, scope: ScopeKind): Promise<ResolvedScope> {
   const headSha = (await tryGit(cwd, ["rev-parse", "HEAD"]))?.trim() ?? "";
   const branch = await currentBranch(cwd);
+  const info = (kind: ScopeInfo["kind"], extra: Partial<ScopeInfo> = {}): ScopeInfo => ({
+    kind,
+    branch,
+    baseRef: null,
+    commit: null,
+    ...extra,
+  });
   if (!headSha) {
     // Repository without commits: everything is new.
-    return { scope, label: "Tout le dépôt (aucun commit)", base: EMPTY_TREE, head: null, includeUntracked: true, headSha: "", branch };
+    return {
+      scope,
+      label: "The whole repository (no commits yet)",
+      info: info("empty-repo"),
+      base: EMPTY_TREE,
+      head: null,
+      includeUntracked: true,
+      headSha: "",
+      branch,
+    };
   }
   if (scope === "uncommitted") {
-    return { scope, label: "Modifs non commitées, depuis HEAD", base: "HEAD", head: null, includeUntracked: true, headSha, branch };
+    return {
+      scope,
+      label: "Uncommitted changes since HEAD",
+      info: info("uncommitted"),
+      base: "HEAD",
+      head: null,
+      includeUntracked: true,
+      headSha,
+      branch,
+    };
   }
   if (scope === "last-commit") {
     const parent = (await verify(cwd, "HEAD~1")) ? "HEAD~1" : EMPTY_TREE;
     const subject = (await tryGit(cwd, ["log", "-1", "--format=%h %s"]))?.trim() ?? "HEAD";
-    return { scope, label: `Dernier commit, ${subject}`, base: parent, head: "HEAD", includeUntracked: false, headSha, branch };
+    return {
+      scope,
+      label: `Last commit, ${subject}`,
+      info: info("last-commit", { commit: subject }),
+      base: parent,
+      head: "HEAD",
+      includeUntracked: false,
+      headSha,
+      branch,
+    };
   }
   const baseRef = await defaultBaseRef(cwd);
   if (!baseRef) {
-    return { scope, label: "Modifs non commitées (pas de branche principale trouvée)", base: "HEAD", head: null, includeUntracked: true, headSha, branch };
+    return {
+      scope,
+      label: "Uncommitted changes (no main branch found)",
+      info: info("no-base"),
+      base: "HEAD",
+      head: null,
+      includeUntracked: true,
+      headSha,
+      branch,
+    };
   }
   const mergeBase = (await tryGit(cwd, ["merge-base", "HEAD", baseRef]))?.trim() || baseRef;
-  const who = branch ? `« ${branch} »` : "HEAD";
   return {
     scope,
-    label: `Ce que ${who} ajoute à ${baseRef}, commité ou non`,
+    label: `What ${branch ? `"${branch}"` : "HEAD"} adds to ${baseRef}, committed or not`,
+    info: info("branch", { baseRef }),
     base: mergeBase,
     head: null,
     includeUntracked: true,

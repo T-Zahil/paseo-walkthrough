@@ -1,22 +1,35 @@
-Walkthrough explique un changement comme le ferait un chef de produit, dans un onglet à côté des agents : ce qui change pour les utilisateurs, pourquoi ça compte pour le business, à quoi ressemblent les écrans et quoi vérifier avant de livrer. Pas de code.
+Walkthrough explains a change the way a product manager would, in a panel next to your agents: what changes for users, why it matters for the business, what the screens look like and what to check before shipping. No code.
 
-Un agent lit le diff et le code autour, puis écrit un titre, une phrase qui résume le changement, un « en bref », les enjeux (revenus, conversion, rétention, confiance, SEO, coûts, opérations) et une visite en étapes, dans l'ordre où un utilisateur rencontre le changement. Chaque étape signale les risques, les décisions à prendre et les questions ouvertes. Une note d'impact sur 10 dit ce qui peut mal tourner.
+An agent reads the diff and the code around it, then writes a title, a one-sentence pitch, a short summary, the business stakes (revenue, conversion, retention, trust, SEO, costs, operations) and a step-by-step tour in the order a user meets the change. Each step flags risks, decisions to make and open questions. An optional review scores the business impact out of 10 and lists what could go wrong.
 
-## Les écrans en vrai
+## Real screenshots
 
-Le plugin lance le site du worktree, ouvre chaque écran ajouté ou modifié et le capture en version ordinateur et mobile. Les captures apparaissent sur la vue d'ensemble et dans chaque étape, avec ce qui change et où regarder.
+For web projects, the plugin starts the worktree's dev server, opens every added or changed page and screenshots it on desktop and mobile. The screenshots appear in the overview and in each step, with what changes and where to look.
 
-Par défaut, il lance le script `dev` de `package.json` sur un port libre et capture avec `scripts/qa-screenshots.ts` s'il existe dans le projet. Les deux commandes se règlent dans les réglages. Pour capturer les écrans réservés aux membres, le script de capture doit pouvoir se connecter (avec needev : `QA_USER_EMAIL` et `QA_USER_PASSWORD` dans le `.env`). Le plugin réutilise aussi une session récente laissée par ce script dans un autre worktree du dépôt.
+The plugin picks the first capture method that applies:
 
-## Lire
+1. The capture command from the plugin settings.
+2. A `scripts/qa-screenshots.ts` script in the project.
+3. The project's own Playwright install (`node_modules/.bin/playwright`), using Chromium. The plugin never downloads Playwright or a browser.
 
-- La vue d'ensemble montre les écrans touchés, les étapes en cartes (vues cochées, risques signalés) et une liste « À vérifier » à cocher.
-- Sur desktop, `j` et `k` passent d'une étape à l'autre et `x` marque l'étape comme vue.
-- Depuis une étape, envoie une question à un agent du workspace, ou lance une nouvelle session sur un worktree créé depuis la branche courante.
+It starts the server with the dev server command from the settings, or with the project's `dev` script on a free port. Pages that need a signed-in user show the sign-in page unless your capture command signs in. Screenshots are optional and can be turned off in the settings.
 
-## Ce qu'il faut savoir
+## Reading a walkthrough
 
-- La génération tourne dans un agent d'arrière-plan, en lecture seule : le plugin accepte ses commandes de lecture (`git diff`, `grep`, `cat`…) et refuse tout le reste.
-- Le coût est celui d'un tour de l'agent choisi ; il s'affiche sous le titre quand le provider le donne.
-- Walkthroughs, captures et progression sont rangés dans le dossier git du worktree (`.git/paseo-walkthrough/`), jamais dans le dépôt.
-- Nécessite Paseo 0.17 ou plus récent.
+- The overview shows the affected screens, the steps as cards (seen, flagged) and a checklist of things to try before shipping.
+- On desktop, `j` and `k` move between steps and `x` marks a step as seen.
+- From a step, send a question to an agent in the workspace, or start a new session on a worktree branched from the current branch, with the agent already briefed.
+
+## Settings
+
+Choose the agent and model, the language of the walkthrough (the app's language by default), the scope opened by default (this branch, uncommitted changes or the last commit), whether to include the review, the dev server and capture commands, and extra instructions for the agent.
+
+## Data and permissions
+
+- The diff, the changed file list and your extra instructions are sent to the agent provider you choose, which reads more of the repository with read-only commands. The plugin answers the agent's permission requests itself: it allows read-only commands such as `git diff`, `grep` and `cat`, and denies everything else.
+- Screenshots run your project's dev server and capture command on your machine. Pages are loaded from `localhost` only.
+- Walkthroughs, screenshots and reading progress are stored in the worktree's git directory (`.git/paseo-walkthrough/`), never in the repository itself.
+- Questions you ask from a step are sent to the agent you pick, with the step's text and the files behind it.
+- Each generation costs one agent turn; the cost appears under the title when the provider reports it.
+
+Requires Paseo 0.17 or later. Screenshots run on macOS and Linux.

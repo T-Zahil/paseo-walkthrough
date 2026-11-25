@@ -1,5 +1,6 @@
 import type { PluginHostProps } from "@getpaseo/plugin/client";
 import { Platform } from "react-native";
+import type { T } from "./messages";
 
 export type Theme = PluginHostProps["theme"];
 export type Colors = Theme["colors"];
@@ -38,33 +39,46 @@ export function impactColor(colors: Colors, score: number): string {
   return colors.foregroundMuted;
 }
 
-export const STAKE_META = {
-  revenue: { label: "Revenus", icon: "Wallet" },
-  conversion: { label: "Conversion", icon: "MousePointerClick" },
-  retention: { label: "Rétention", icon: "Repeat" },
-  trust: { label: "Confiance", icon: "ShieldCheck" },
-  seo: { label: "SEO", icon: "Search" },
-  cost: { label: "Coûts", icon: "PiggyBank" },
-  ops: { label: "Opérations", icon: "Wrench" },
+export const STAKE_ICON = {
+  revenue: "Wallet",
+  conversion: "MousePointerClick",
+  retention: "Repeat",
+  trust: "ShieldCheck",
+  seo: "Search",
+  cost: "PiggyBank",
+  ops: "Wrench",
 } as const;
 
-export const NOTE_LABEL = { decision: "À décider", question: "Question" } as const;
-
-export const RISK_LABEL = { high: "élevé", medium: "moyen", low: "faible" } as const;
-
-export function timeAgo(iso: string): string {
+export function timeAgo(t: T, iso: string): string {
   const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
-  if (seconds < 60) return "à l'instant";
+  if (seconds < 60) return t("ago.now");
   const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `il y a ${minutes} min`;
+  if (minutes < 60) return t("ago.minutes", { count: minutes });
   const hours = Math.round(minutes / 60);
-  if (hours < 24) return `il y a ${hours} h`;
-  const days = Math.round(hours / 24);
-  return `il y a ${days} j`;
+  if (hours < 24) return t("ago.hours", { count: hours });
+  return t("ago.days", { count: Math.round(hours / 24) });
 }
 
-export function plural(count: number, one: string, many: string): string {
-  return `${count} ${count > 1 ? many : one}`;
+export function formatMoney(locale: string, value: number): string {
+  const digits = value < 0.01 ? 3 : 2;
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }).format(value);
+  } catch {
+    return `$${value.toFixed(digits)}`;
+  }
+}
+
+export function formatScore(locale: string, value: number): string {
+  try {
+    return new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(value);
+  } catch {
+    return value.toFixed(1);
+  }
 }
 
 /** React Native Web adds `hovered` to the Pressable state; native leaves it undefined. */

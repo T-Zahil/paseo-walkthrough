@@ -1,12 +1,18 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
-import { z } from "zod";
 import { readDiff, resolveScope } from "./git";
-import { buildPrompt, repairPrompt } from "./prompt";
+import { answerSchema, buildPrompt, repairPrompt } from "./prompt";
 import { parseAnswer, shapeWalkthrough } from "./shape";
 import { answerGeneratorPermission } from "./permissions";
 import { captureScreens } from "./capture";
 import { loadWalkthrough, saveWalkthrough } from "./store";
-import { type Job, RawWalkthrough, type ScopeKind, type Walkthrough, type WalkthroughSettings } from "../shared/walkthrough";
+import {
+  type Job,
+  type Phase,
+  type ScopeKind,
+  type Walkthrough,
+  type WalkthroughSettings,
+  walkthroughLanguage,
+} from "../shared/walkthrough";
 
 type PaseoApi = PluginHandlerContext["paseo"];
 
@@ -58,18 +64,13 @@ async function readOnlyMode(paseo: PaseoApi, provider: string): Promise<string |
   }
 }
 
-function outputSchema(): Record<string, unknown> {
-  const schema = z.toJSONSchema(RawWalkthrough) as Record<string, unknown>;
-  delete schema.$schema;
-  return schema;
-}
-
 interface StartInput {
   cwd: string;
   scope: ScopeKind;
   workspaceId: string;
   settings: WalkthroughSettings;
   capturesOnly?: boolean;
+  locale?: string;
 }
 
 interface Running {
@@ -117,7 +118,7 @@ export class Generator {
     const existing = this.jobs.get(key);
     if (existing?.job.state === "running") return;
     const running: Running = {
-      job: { state: "running", startedAt: new Date().toISOString(), phase: "Lecture du diff…", error: null, agentId: null },
+      job: { state: "running", startedAt: new Date().toISOString(), phase: { key: "reading" }, error: null, agentId: null },
       agentId: null,
       cancelled: false,
     };
@@ -145,12 +146,13 @@ export class Generator {
       routes,
       settings: input.settings,
       cancelled: () => running.cancelled,
-      phase: (text) => {
-        running.job = { ...running.job, phase: text };
+      phase: (phase: Phase) => {
+        running.job = { ...running.job, phase };
       },
     }).catch((error: unknown) => ({
       shots: new Map(),
       anonymous: false,
+      reason: "error" as const,
       note: (error as Error)?.message ?? String(error),
       failed: true,
     }));
@@ -161,15 +163,20 @@ export class Generator {
     current.screens = current.screens.map((screen) => ({ ...screen, shot: result.shots.get(screen.route) ?? screen.shot }));
     // The signed-out warning only matters when a screen needs a signed-in user.
     const needsLogin = current.screens.some((screen) => screen.login);
-    const note = result.anonymous && !needsLogin && !result.failed ? null : result.note;
-    current.captures = { state: result.failed ? "failed" : "done", note, anonymous: result.anonymous };
+    const quiet = result.reason === "signed-out" && !needsLogin;
+    current.captures = {
+      state: result.failed ? "failed" : "done",
+      reason: quiet ? null : result.reason,
+      note: quiet ? null : result.note,
+      anonymous: result.anonymous,
+    };
     await saveWalkthrough(input.cwd, current);
   }
 
   private async recapture(running: Running, input: StartInput): Promise<void> {
     const walkthrough = await loadWalkthrough(input.cwd, input.scope);
-    if (!walkthrough) throw new Error("Aucun walkthrough à illustrer.");
-    walkthrough.captures = { state: "pending", note: null, anonymous: false };
+    if (!walkthrough) throw new Error("There is no walkthrough to illustrate.");
+    walkthrough.captures = { state: "pending", reason: null, note: null, anonymous: false };
     await saveWalkthrough(input.cwd, walkthrough);
     await this.captures(running, { ...input, settings: { ...input.settings, captures: true } }, walkthrough);
   }
@@ -179,18 +186,19 @@ export class Generator {
     const { cwd, scope, workspaceId, settings } = input;
     const resolved = await resolveScope(cwd, scope);
     const diff = await readDiff(cwd, resolved);
-    if (diff.files.length === 0) throw new Error("Aucune modification à expliquer pour cette portée.");
+    if (diff.files.length === 0) throw new Error("There are no changes to explain in this scope.");
 
     const catalog = await modelCatalog(this.paseo);
     const provider = settings.provider || catalog.fallback;
-    if (!provider) throw new Error("Aucun agent disponible. Active un provider dans Paseo.");
+    if (!provider) throw new Error("No agent is available. Enable a provider in Paseo.");
     const modelLabel = catalog.options.find((o) => o.value === provider)?.label.split(" · ").pop() ?? provider;
-    running.job = { ...running.job, phase: `${modelLabel} lit ${diff.files.length} fichier${diff.files.length > 1 ? "s" : ""}…` };
+    running.job = { ...running.job, phase: { key: "agentReading", model: modelLabel, count: diff.files.length } };
+    const language = walkthroughLanguage(settings.language, input.locale);
 
     const prompt = buildPrompt({
       diff,
       resolved,
-      language: settings.language,
+      language,
       review: settings.review,
       instructions: settings.instructions,
     });
@@ -203,7 +211,8 @@ export class Generator {
         prompt,
         background: true,
         labels: { [GENERATOR_LABEL]: "generator" },
-        ...(withSchema ? { outputSchema: outputSchema() } : {}),
+        // Providers that enforce structured output use this; the prompt carries the same schema for the rest.
+        ...(withSchema ? { outputSchema: answerSchema() } : {}),
       });
 
     type Agent = Awaited<ReturnType<typeof create>>;
@@ -254,22 +263,22 @@ export class Generator {
     try {
       let parsed = result.status === "idle" ? parseAnswer(result.lastMessage ?? "") : null;
       if (parsed && !parsed.ok && !running.cancelled) {
-        running.job = { ...running.job, phase: "Correction de la réponse…" };
+        running.job = { ...running.job, phase: { key: "repairing" } };
         await agent.send(repairPrompt(parsed.error));
         result = await settle(agent);
         parsed = result.status === "idle" ? parseAnswer(result.lastMessage ?? "") : null;
       }
       if (running.cancelled) return;
       if (!parsed) {
-        if (result.status === "timeout") throw new Error("L'agent n'a pas fini à temps (20 min).");
-        if (result.status === "permission") throw new Error("L'agent a demandé trop de permissions.");
-        throw new Error(result.error ?? "L'agent s'est arrêté sur une erreur.");
+        if (result.status === "timeout") throw new Error("The agent did not finish in time (20 min).");
+        if (result.status === "permission") throw new Error("The agent asked for too many permissions.");
+        throw new Error(result.error ?? "The agent stopped on an error.");
       }
-      if (!parsed.ok) throw new Error(`Réponse inutilisable : ${parsed.error}`);
+      if (!parsed.ok) throw new Error(`Unusable answer: ${parsed.error}`);
 
       await agent.refresh().catch(() => null);
       const costUsd = agent.lastUsage?.totalCostUsd ?? null;
-      running.job = { ...running.job, phase: "Mise en forme…" };
+      running.job = { ...running.job, phase: { key: "shaping" } };
       const fresh = await readDiff(cwd, resolved);
       const walkthrough = shapeWalkthrough({
         raw: parsed.value,
@@ -277,7 +286,7 @@ export class Generator {
         resolved,
         provider,
         modelLabel,
-        language: settings.language,
+        language,
         costUsd: typeof costUsd === "number" ? costUsd : null,
         durationMs: Date.now() - started,
         captures: settings.captures,

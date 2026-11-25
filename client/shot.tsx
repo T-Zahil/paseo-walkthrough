@@ -1,10 +1,11 @@
-import { useRpc } from "@getpaseo/plugin/client";
+import { useRpc, useTranslation } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Image, Pressable, Text, View } from "react-native";
 import { getImage, type Screen } from "../shared/walkthrough";
 import { Tag } from "./bits";
+import { messages, type T } from "./messages";
 import { alpha, type Colors, MONO, type PressState } from "./style";
 
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -50,7 +51,9 @@ function useShotUri(cwd: string, file: string | null) {
 /** Desktop captures are mostly margins on the sides: zoom in so the content is legible. */
 const ZOOM = (imageWidth: number) => (imageWidth >= 1000 ? 1.6 : 1);
 
-export const STATUS_LABEL = { new: "Nouveau", changed: "Modifié", removed: "Supprimé" } as const;
+export function statusLabel(t: T, status: Screen["status"]): string {
+  return t(`screen.${status}`);
+}
 
 export function statusColor(colors: Colors, status: Screen["status"]): string {
   if (status === "new") return colors.statusSuccess;
@@ -61,6 +64,7 @@ export function statusColor(colors: Colors, status: Screen["status"]): string {
 /** The top of a capture, zoomed on its centre and cropped to a fixed height: a thumbnail for cards. */
 export function ShotThumb(props: { colors: Colors; cwd: string; screen: Screen; height: number; pending: boolean }) {
   const { colors, screen } = props;
+  const { t } = useTranslation(messages);
   const file = screen.shot?.desktop ?? screen.shot?.mobile ?? null;
   const shot = useShotUri(props.cwd, file);
   const [width, setWidth] = useState(0);
@@ -86,7 +90,7 @@ export function ShotThumb(props: { colors: Colors; cwd: string; screen: Screen; 
         <View style={{ alignItems: "center", gap: 4, padding: 8 }}>
           <Icon name="ImageOff" size={18} color={colors.foregroundMuted} />
           <Text numberOfLines={2} style={{ color: colors.foregroundMuted, fontSize: 10.5, textAlign: "center" }}>
-            {screen.shot?.error ?? "Pas de capture"}
+            {screen.shot?.error ?? t("screen.none")}
           </Text>
         </View>
       )}
@@ -97,6 +101,7 @@ export function ShotThumb(props: { colors: Colors; cwd: string; screen: Screen; 
 /** A screen as it appears in a step: what changed, where to look, and the capture. */
 export function ScreenBlock(props: { colors: Colors; cwd: string; screen: Screen; pending: boolean; compact: boolean }) {
   const { colors, screen } = props;
+  const { t } = useTranslation(messages);
   const hasDesktop = !!screen.shot?.desktop;
   const hasMobile = !!screen.shot?.mobile;
   const [viewport, setViewport] = useState<"desktop" | "mobile">(hasDesktop || !hasMobile ? "desktop" : "mobile");
@@ -116,22 +121,22 @@ export function ScreenBlock(props: { colors: Colors; cwd: string; screen: Screen
     <View style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 10, overflow: "hidden", backgroundColor: colors.surface1 }}>
       <View style={{ padding: 12, gap: 6 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <Tag colors={colors} label={STATUS_LABEL[screen.status]} color={statusColor(colors, screen.status)} />
+          <Tag colors={colors} label={statusLabel(t, screen.status)} color={statusColor(colors, screen.status)} />
           <Text style={{ color: colors.foreground, fontSize: 14, fontWeight: "700", flexShrink: 1 }}>{screen.title}</Text>
           <Text selectable style={{ color: colors.foregroundMuted, fontSize: 11.5, fontFamily: MONO }}>
             {screen.route}
           </Text>
-          {screen.login ? <Tag colors={colors} icon="Lock" label="Connecté" /> : null}
+          {screen.login ? <Tag colors={colors} icon="Lock" label={t("screen.signedIn")} /> : null}
         </View>
         {screen.change ? (
           <Text style={{ color: colors.foreground, fontSize: 13, lineHeight: 19 }}>
-            <Text style={{ fontWeight: "700" }}>Ce qui change : </Text>
+            <Text style={{ fontWeight: "700" }}>{t("screen.whatChanges")}</Text>
             {screen.change}
           </Text>
         ) : null}
         {screen.lookAt ? (
           <Text style={{ color: colors.foreground, fontSize: 13, lineHeight: 19 }}>
-            <Text style={{ fontWeight: "700" }}>À regarder : </Text>
+            <Text style={{ fontWeight: "700" }}>{t("screen.lookAt")}</Text>
             {screen.lookAt}
           </Text>
         ) : null}
@@ -154,7 +159,7 @@ export function ScreenBlock(props: { colors: Colors; cwd: string; screen: Screen
                 })}
               >
                 <Icon name={v === "desktop" ? "Monitor" : "Smartphone"} size={13} color={colors.foreground} />
-                <Text style={{ color: colors.foreground, fontSize: 12 }}>{v === "desktop" ? "Ordinateur" : "Mobile"}</Text>
+                <Text style={{ color: colors.foreground, fontSize: 12 }}>{v === "desktop" ? t("screen.desktop") : t("screen.mobile")}</Text>
               </Pressable>
             ))}
           </View>
@@ -182,7 +187,7 @@ export function ScreenBlock(props: { colors: Colors; cwd: string; screen: Screen
                 })}
               >
                 <Text style={{ color: colors.accent, fontSize: 12, fontWeight: "600" }}>
-                  {expanded ? "Réduire" : "Voir toute la page"}
+                  {expanded ? t("screen.collapse") : t("screen.expand")}
                 </Text>
               </Pressable>
             ) : null}
@@ -190,13 +195,13 @@ export function ScreenBlock(props: { colors: Colors; cwd: string; screen: Screen
         ) : file || props.pending ? (
           <View style={{ height: 180, alignItems: "center", justifyContent: "center", gap: 8 }}>
             <ActivityIndicator color={colors.foregroundMuted} />
-            <Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>{props.pending ? "Capture en cours…" : "Chargement…"}</Text>
+            <Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>{props.pending ? t("screen.capturing") : t("screen.loading")}</Text>
           </View>
         ) : (
           <View style={{ height: 110, alignItems: "center", justifyContent: "center", gap: 6, padding: 12 }}>
             <Icon name="ImageOff" size={18} color={colors.foregroundMuted} />
             <Text style={{ color: colors.foregroundMuted, fontSize: 12, textAlign: "center" }}>
-              {screen.shot?.error ?? "Pas de capture pour cet écran."}
+              {screen.shot?.error ?? t("screen.noneHere")}
             </Text>
           </View>
         )}

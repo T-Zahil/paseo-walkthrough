@@ -121,6 +121,34 @@ export function normalizeAnswer(input: unknown): unknown {
   };
 }
 
+const REQUIRED_ROOT = ["title", "pitch", "summary", "screens", "steps", "checks"] as const;
+const REQUIRED_STEP = ["screens", "notes"] as const;
+const TEXT_STEP = ["title", "explanation"] as const;
+
+const hasText = (value: unknown): boolean => typeof value === "string" && value.trim() !== "";
+
+/**
+ * Fields the answer leaves out or leaves empty. Normalization forgives near-miss enum values, not
+ * a different shape: an answer written against other field names would otherwise parse into an
+ * empty tour.
+ */
+export function missingFields(input: unknown): string[] {
+  const root = record(input);
+  const missing: string[] = REQUIRED_ROOT.filter((key) => !(key in root));
+  list(root.steps).forEach((raw, index) => {
+    const step = record(raw);
+    for (const key of TEXT_STEP) if (!hasText(step[key])) missing.push(`steps[${index}].${key}`);
+    for (const key of REQUIRED_STEP) if (!(key in step)) missing.push(`steps[${index}].${key}`);
+  });
+  list(root.screens).forEach((raw, index) => {
+    if (!hasText(record(raw).route)) missing.push(`screens[${index}].route`);
+  });
+  list(root.checks).forEach((raw, index) => {
+    if (!hasText(record(raw).text)) missing.push(`checks[${index}].text`);
+  });
+  return missing;
+}
+
 /** Pulls the JSON object out of an agent answer, tolerating a Markdown fence or stray prose. */
 export function parseAnswer(answer: string): { ok: true; value: RawWalkthrough } | { ok: false; error: string } {
   let body = answer.trim();
@@ -137,6 +165,11 @@ export function parseAnswer(answer: string): { ok: true; value: RawWalkthrough }
     json = JSON.parse(body);
   } catch (error) {
     return { ok: false, error: `invalid JSON (${(error as Error).message})` };
+  }
+  const missing = missingFields(json);
+  if (missing.length) {
+    const shown = missing.slice(0, 8).join(", ");
+    return { ok: false, error: `missing fields: ${shown}${missing.length > 8 ? ", …" : ""}` };
   }
   const parsed = RawSchema.safeParse(normalizeAnswer(json));
   if (!parsed.success) {
@@ -210,7 +243,7 @@ export function shapeWalkthrough(input: {
     const stepNumber = index + 1;
     return {
       id: `s${stepNumber}`,
-      group: rawStep.group.trim() || "Changements",
+      group: rawStep.group.trim(),
       title: rawStep.title.trim(),
       explanation: rawStep.explanation.trim(),
       importance: rawStep.importance,
@@ -236,6 +269,7 @@ export function shapeWalkthrough(input: {
     version: 2,
     scope: resolved.scope,
     scopeLabel: resolved.label,
+    scopeInfo: resolved.info,
     base: resolved.base,
     branch: resolved.branch,
     headSha: resolved.headSha,
@@ -259,7 +293,8 @@ export function shapeWalkthrough(input: {
     review,
     captures: {
       state: !input.captures ? "skipped" : screens.length ? "pending" : "skipped",
-      note: !input.captures ? "Captures désactivées dans les réglages." : screens.length ? null : "Aucun écran à capturer.",
+      reason: !input.captures ? "disabled" : screens.length ? null : "no-screens",
+      note: null,
       anonymous: false,
     },
     totals: {

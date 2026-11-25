@@ -1,4 +1,5 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
+import { messages } from "./client/messages";
 import { WalkthroughPanel } from "./client/panel";
 import { setClient } from "./client/runtime";
 import { SettingsScreen } from "./client/settings";
@@ -17,7 +18,7 @@ export default function contribute(client: PluginClientContext) {
 
   client.addCommandCenterItem({
     id: "open-walkthrough",
-    title: "Ouvrir le walkthrough",
+    title: messages.message("plugin.open"),
     icon: "Route",
     context: "workspace",
     onSelect({ openPanel }) {
@@ -27,7 +28,7 @@ export default function contribute(client: PluginClientContext) {
 
   client.addSlashCommand({
     name: "walkthrough",
-    description: "Ouvre la visite guidée du diff de ce workspace",
+    description: messages.message("plugin.slash"),
     argumentHint: "",
     context: "workspace",
     onSubmit({ openPanel }) {

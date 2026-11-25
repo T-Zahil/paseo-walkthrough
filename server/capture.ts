@@ -5,7 +5,7 @@ import { createServer } from "node:net";
 import { join, resolve, sep } from "node:path";
 import { execCommand } from "@getpaseo/plugin/server";
 import { gitDir, worktreePaths } from "./git";
-import type { ScopeKind, Shot, WalkthroughSettings } from "../shared/walkthrough";
+import type { CaptureReason, Phase, ScopeKind, Shot, WalkthroughSettings } from "../shared/walkthrough";
 
 const SERVER_TIMEOUT_MS = 4 * 60 * 1000;
 const WARMUP_TIMEOUT_MS = 2 * 60 * 1000;
@@ -13,15 +13,19 @@ const CAPTURE_TIMEOUT_MS = 15 * 60 * 1000;
 const QA_SCRIPT = "scripts/qa-screenshots.ts";
 const AUTH_STATE = ".qa/.auth/storage-state.json";
 const AUTH_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+// Playwright device presets switch to WebKit, which a project may not have installed: stay on
+// Chromium and emulate a phone with its width and user agent.
+const MOBILE_USER_AGENT =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
 
 export interface CaptureOutcome {
   shots: Map<string, Shot>;
   anonymous: boolean;
+  reason: CaptureReason | null;
+  /** Raw detail: command output or error message. */
   note: string | null;
   failed: boolean;
 }
-
-type Phase = (text: string) => void;
 
 function timeoutSignal(ms: number): AbortSignal {
   const controller = new AbortController();
@@ -41,7 +45,7 @@ export async function shotsRoot(cwd: string): Promise<string> {
 export async function readShot(cwd: string, file: string): Promise<Uint8Array> {
   const root = await shotsRoot(cwd);
   const path = resolve(root, file);
-  if (!path.startsWith(root + sep)) throw new Error("Chemin de capture invalide");
+  if (!path.startsWith(root + sep)) throw new Error("Invalid screenshot path");
   return new Uint8Array(await readFile(path));
 }
 
@@ -81,14 +85,48 @@ async function devCommand(cwd: string, settings: WalkthroughSettings, port: numb
   return `npm run dev -- --port ${port}`;
 }
 
-function captureCommand(cwd: string, settings: WalkthroughSettings): { template: string; qaScript: boolean } | null {
-  if (settings.captureCommand.trim()) return { template: settings.captureCommand, qaScript: false };
+interface CaptureCommand {
+  kind: "custom" | "qa-script" | "playwright";
+  build: (input: { routes: string[]; out: string; baseUrl: string }) => string;
+}
+
+function fromTemplate(template: string, kind: CaptureCommand["kind"]): CaptureCommand {
+  return {
+    kind,
+    build: ({ routes, out, baseUrl }) =>
+      template.replaceAll("{routes}", quote(routes.join(","))).replaceAll("{out}", quote(out)).replaceAll("{baseUrl}", quote(baseUrl)),
+  };
+}
+
+/**
+ * The project's own Playwright CLI, one desktop and one mobile shot per route, named
+ * `<slug>-desktop.png` and `<slug>-mobile.png`. Never downloads anything: without a local
+ * install this option is skipped, and missing browsers surface as a capture error.
+ */
+function playwrightCommand(bin: string): CaptureCommand {
+  return {
+    kind: "playwright",
+    build: ({ routes, out, baseUrl }) =>
+      routes
+        .flatMap((route) => {
+          const url = quote(baseUrl + route);
+          const slug = slugify(route);
+          return [
+            `${quote(bin)} screenshot --browser=chromium --full-page --viewport-size=1280,800 ${url} ${quote(join(out, `${slug}-desktop.png`))}`,
+            `${quote(bin)} screenshot --browser=chromium --full-page --viewport-size=390,844 --user-agent=${quote(MOBILE_USER_AGENT)} ${url} ${quote(join(out, `${slug}-mobile.png`))}`,
+          ];
+        })
+        .join("; "),
+  };
+}
+
+function captureCommand(cwd: string, settings: WalkthroughSettings): CaptureCommand | null {
+  if (settings.captureCommand.trim()) return fromTemplate(settings.captureCommand, "custom");
   if (existsSync(join(cwd, QA_SCRIPT))) {
-    return {
-      template: `bun run ${QA_SCRIPT} --routes {routes} --out {out} --base-url {baseUrl} --max-scroll 25`,
-      qaScript: true,
-    };
+    return fromTemplate(`bun run ${QA_SCRIPT} --routes {routes} --out {out} --base-url {baseUrl} --max-scroll 25`, "qa-script");
   }
+  const playwright = join(cwd, "node_modules", ".bin", "playwright");
+  if (existsSync(playwright)) return playwrightCommand(playwright);
   return null;
 }
 
@@ -138,9 +176,9 @@ function collect(child: ChildProcess, max = 400): { lines: string[] } {
 async function waitForServer(url: string, child: ChildProcess, output: { lines: string[] }, signal: () => boolean) {
   const deadline = Date.now() + SERVER_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    if (signal()) throw new Error("Annulé");
+    if (signal()) throw new Error("Cancelled");
     if (child.exitCode !== null) {
-      throw new Error(`Le serveur de dev s'est arrêté : ${output.lines.slice(-4).join(" · ") || "aucune sortie"}`);
+      throw new Error(`The dev server stopped: ${output.lines.slice(-4).join(" · ") || "no output"}`);
     }
     try {
       await fetch(url, { signal: timeoutSignal(5000), redirect: "manual" });
@@ -149,7 +187,7 @@ async function waitForServer(url: string, child: ChildProcess, output: { lines: 
       await new Promise((done) => setTimeout(done, 1500));
     }
   }
-  throw new Error("Le serveur de dev n'a pas répondu en 4 minutes.");
+  throw new Error("The dev server did not answer within 4 minutes.");
 }
 
 /** Reuses the freshest signed-in session saved by the QA script in any checkout of the repo. */
@@ -222,29 +260,31 @@ export async function captureScreens(input: {
   scope: ScopeKind;
   routes: string[];
   settings: WalkthroughSettings;
-  phase: Phase;
+  phase: (phase: Phase) => void;
   cancelled: () => boolean;
 }): Promise<CaptureOutcome> {
   const { cwd, scope, routes, settings, phase, cancelled } = input;
   const shots = new Map<string, Shot>();
-  const outcome = (note: string, failed = true): CaptureOutcome => ({ shots, anonymous: false, note, failed });
+  const outcome = (reason: CaptureReason, note: string | null = null): CaptureOutcome => ({
+    shots,
+    anonymous: false,
+    reason,
+    note,
+    failed: true,
+  });
 
   const capture = captureCommand(cwd, settings);
-  if (!capture) {
-    return outcome(
-      `Pas de script de capture dans ce projet (${QA_SCRIPT}). Ajoute une commande de capture dans les réglages du plugin.`,
-    );
-  }
+  if (!capture) return outcome("no-capture-command");
   const port = await freePort();
   const dev = await devCommand(cwd, settings, port);
-  if (!dev) return outcome("Pas de script « dev » dans package.json : précise la commande du serveur dans les réglages.");
+  if (!dev) return outcome("no-dev-command");
 
   const root = await shotsRoot(cwd);
   const runDir = `${scope}-${Date.now().toString(36)}`;
   const out = join(root, runDir);
   await mkdir(out, { recursive: true });
 
-  phase("Lancement du site…");
+  phase({ key: "startingSite" });
   const baseUrl = `http://localhost:${port}`;
   const server = shell(dev, cwd, { PORT: String(port), NUXT_PORT: String(port), BROWSER: "none" });
   const serverOutput = collect(server);
@@ -253,8 +293,8 @@ export async function captureScreens(input: {
 
     // The first request to each page compiles it; do it before the capture timeouts start.
     for (const [index, route] of routes.entries()) {
-      if (cancelled()) return outcome("Annulé");
-      phase(`Préparation des écrans (${index + 1}/${routes.length})…`);
+      if (cancelled()) return outcome("cancelled");
+      phase({ key: "warming", index: index + 1, count: routes.length });
       try {
         await fetch(baseUrl + route, { signal: timeoutSignal(WARMUP_TIMEOUT_MS), redirect: "manual" });
       } catch {
@@ -262,14 +302,10 @@ export async function captureScreens(input: {
       }
     }
 
-    if (capture.qaScript) await seedAuthState(cwd).catch(() => undefined);
+    if (capture.kind === "qa-script") await seedAuthState(cwd).catch(() => undefined);
 
-    phase(`Captures de ${routes.length} écran${routes.length > 1 ? "s" : ""}…`);
-    const command = capture.template
-      .replaceAll("{routes}", quote(routes.join(",")))
-      .replaceAll("{out}", quote(out))
-      .replaceAll("{baseUrl}", quote(baseUrl));
-    const runner = shell(command, cwd, {});
+    phase({ key: "capturing", count: routes.length });
+    const runner = shell(capture.build({ routes, out, baseUrl }), cwd, {});
     const runnerOutput = collect(runner, 2000);
     const finished = await Promise.race([
       new Promise<number>((done) => runner.once("exit", (code) => done(code ?? 1))),
@@ -277,7 +313,9 @@ export async function captureScreens(input: {
     ]);
     if (finished === -1) await stop(runner);
 
-    const anonymous = runnerOutput.lines.some((line) => /ANONYMOUS mode|Anonymous mode forced/i.test(line));
+    // Lines printed by scripts/qa-screenshots.ts; the Playwright CLI is always captured signed out.
+    const anonymous =
+      capture.kind === "playwright" || runnerOutput.lines.some((line) => /ANONYMOUS mode|Anonymous mode forced/i.test(line));
     const errors = new Map<string, string>();
     const files = new Map<string, { desktop: string | null; mobile: string | null }>();
     for (const line of runnerOutput.lines) {
@@ -291,7 +329,7 @@ export async function captureScreens(input: {
       const ko = /^✗\s+(\S+)\s+\((desktop|mobile)\):\s+(.+)$/.exec(line.trim());
       if (ko) errors.set(ko[1], ko[3].slice(0, 200));
     }
-    // Commands that do not print the QA script's lines: match files by route slug.
+    // Commands that do not print those lines: match files by route slug.
     if (files.size === 0) {
       const names = await readdir(out).catch(() => [] as string[]);
       for (const route of routes) {
@@ -303,17 +341,13 @@ export async function captureScreens(input: {
       }
     }
 
-    phase("Mise en forme des captures…");
+    phase({ key: "processingShots" });
     const sips = await hasSips();
     for (const route of routes) {
       const found = files.get(route);
       const desktop = found?.desktop ? `${runDir}/${await shrink(out, found.desktop, 1280, sips)}` : null;
       const mobile = found?.mobile ? `${runDir}/${await shrink(out, found.mobile, 640, sips)}` : null;
-      shots.set(route, {
-        desktop,
-        mobile,
-        error: desktop || mobile ? null : (errors.get(route) ?? "Capture impossible"),
-      });
+      shots.set(route, { desktop, mobile, error: desktop || mobile ? null : (errors.get(route) ?? null) });
     }
 
     // Older runs of this scope are no longer referenced.
@@ -322,13 +356,8 @@ export async function captureScreens(input: {
     }
 
     const captured = [...shots.values()].filter((s) => s.desktop || s.mobile).length;
-    const note =
-      captured === 0
-        ? `Aucune capture n'a abouti. ${runnerOutput.lines.slice(-3).join(" · ")}`.trim()
-        : anonymous
-          ? "Captures faites sans connexion : les écrans réservés aux membres montrent la page de connexion. Ajoute QA_USER_EMAIL et QA_USER_PASSWORD au .env du projet pour les voir connecté."
-          : null;
-    return { shots, anonymous, note, failed: captured === 0 };
+    if (captured === 0) return outcome("none-captured", runnerOutput.lines.slice(-3).join(" · ") || null);
+    return { shots, anonymous, reason: anonymous ? "signed-out" : null, note: null, failed: false };
   } finally {
     await stop(server);
   }

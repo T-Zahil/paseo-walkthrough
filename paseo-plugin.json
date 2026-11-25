@@ -1,9 +1,20 @@
 {
   "id": "paseo-walkthrough",
-  "media": [],
+  "name": "Walkthrough",
+  "description": "Explains each change like a product manager: what changes for users, the business stakes, real screenshots and what to check before shipping.",
+  "icon": "assets/icon.png",
+  "media": ["assets/overview.png", "assets/step.png"],
+  "translations": {
+    "fr": {
+      "name": "Walkthrough",
+      "description": "Explique chaque changement comme un chef de produit : ce qui change pour les utilisateurs, les enjeux business, les écrans en vraies captures et quoi vérifier avant de livrer."
+    },
+    "zh-CN": {
+      "name": "变更导览",
+      "description": "像产品经理一样讲解每一次改动：用户看到什么变化、业务影响、真实页面截图，以及上线前要检查的事项。"
+    }
+  },
   "requirements": {
     "paseo": ">=0.17.0"
-  },
-  "name": "Walkthrough",
-  "description": "Comprends chaque changement comme un produit : ce qui change pour les utilisateurs, les enjeux business, les écrans en vraies captures et quoi vérifier."
+  }
 }
