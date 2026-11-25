@@ -122,18 +122,29 @@ export function normalizeAnswer(input: unknown): unknown {
 }
 
 const REQUIRED_ROOT = ["title", "pitch", "summary", "screens", "steps", "checks"] as const;
-const REQUIRED_STEP = ["title", "explanation", "screens", "notes"] as const;
+const REQUIRED_STEP = ["screens", "notes"] as const;
+const TEXT_STEP = ["title", "explanation"] as const;
+
+const hasText = (value: unknown): boolean => typeof value === "string" && value.trim() !== "";
 
 /**
- * Field names the answer leaves out. Normalization forgives near-miss enum values, not missing
- * fields: an answer written against another shape would otherwise parse into an empty tour.
+ * Fields the answer leaves out or leaves empty. Normalization forgives near-miss enum values, not
+ * a different shape: an answer written against other field names would otherwise parse into an
+ * empty tour.
  */
 export function missingFields(input: unknown): string[] {
   const root = record(input);
   const missing: string[] = REQUIRED_ROOT.filter((key) => !(key in root));
   list(root.steps).forEach((raw, index) => {
     const step = record(raw);
+    for (const key of TEXT_STEP) if (!hasText(step[key])) missing.push(`steps[${index}].${key}`);
     for (const key of REQUIRED_STEP) if (!(key in step)) missing.push(`steps[${index}].${key}`);
+  });
+  list(root.screens).forEach((raw, index) => {
+    if (!hasText(record(raw).route)) missing.push(`screens[${index}].route`);
+  });
+  list(root.checks).forEach((raw, index) => {
+    if (!hasText(record(raw).text)) missing.push(`checks[${index}].text`);
   });
   return missing;
 }

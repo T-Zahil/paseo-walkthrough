@@ -64,6 +64,19 @@ describe("agent answers", () => {
     });
   });
 
+  it("rejects empty explanations and malformed screens or checks", () => {
+    const sloppy = {
+      ...answer,
+      screens: [{ path: "/pricing", title: "Pricing" }],
+      steps: [{ ...answer.steps[0], explanation: null }],
+      checks: ["Open /pricing"],
+    };
+    expect(parseAnswer(JSON.stringify(sloppy))).toEqual({
+      ok: false,
+      error: "missing fields: steps[0].explanation, screens[0].route, checks[0].text",
+    });
+  });
+
   it("rejects an answer without steps", () => {
     expect(parseAnswer(JSON.stringify({ ...answer, steps: [] }))).toEqual({ ok: false, error: "the walkthrough has no steps" });
   });
