@@ -1,9 +1,39 @@
+import { useTranslation } from "@getpaseo/plugin/client";
 import { Icon, Markdown } from "@getpaseo/plugin/client/ui";
 import { Pressable, Text, View } from "react-native";
-import type { Progress, Step, Walkthrough } from "../shared/walkthrough";
+import type { CaptureReason, Progress, Step, Walkthrough } from "../shared/walkthrough";
 import { Button, Chip, LinkText, ProgressBar, SectionLabel, Tag } from "./bits";
-import { ShotThumb, STATUS_LABEL, statusColor } from "./shot";
-import { alpha, type Colors, impactColor, plural, type PressState, RISK_LABEL, riskColor, STAKE_META, timeAgo } from "./style";
+import { messages, type T } from "./messages";
+import { describeScope } from "./scope";
+import { ShotThumb, statusColor, statusLabel } from "./shot";
+import {
+  alpha,
+  type Colors,
+  formatMoney,
+  formatScore,
+  impactColor,
+  type PressState,
+  riskColor,
+  STAKE_ICON,
+  timeAgo,
+} from "./style";
+
+const CAPTURE_KEYS = {
+  disabled: "captures.disabled",
+  "no-screens": "captures.noScreens",
+  "no-capture-command": "captures.noCaptureCommand",
+  "no-dev-command": "captures.noDevCommand",
+  "none-captured": "captures.noneCaptured",
+  "signed-out": "captures.signedOut",
+  cancelled: "captures.cancelled",
+  error: "captures.error",
+} as const satisfies Record<CaptureReason, string>;
+
+/** The capture banner: the reason in the app's language, then the raw detail as is. */
+function captureText(t: T, captures: Walkthrough["captures"]): string | null {
+  const reason = captures.reason ? t(CAPTURE_KEYS[captures.reason]) : null;
+  return [reason, captures.note].filter(Boolean).join(" ") || null;
+}
 
 export function resumeStep(walkthrough: Walkthrough, progress: Progress): Step | null {
   const read = new Set(progress.read);
@@ -14,16 +44,14 @@ export function resumeStep(walkthrough: Walkthrough, progress: Progress): Step |
 }
 
 export function StepFlag({ colors, step }: { colors: Colors; step: Step }) {
+  const { t } = useTranslation(messages);
   if (step.risk === "high" || step.risk === "medium")
-    return <Tag colors={colors} icon="Flag" label={`Risque ${RISK_LABEL[step.risk]}`} color={riskColor(colors, step.risk)} />;
-  if (step.notes.some((n) => n.kind === "decision")) return <Tag colors={colors} icon="CircleHelp" label="À décider" color={colors.statusWarning} />;
-  if (step.importance === "key") return <Tag colors={colors} label="Important" color={colors.accent} />;
-  if (step.importance === "minor") return <Tag colors={colors} label="Détail" />;
+    return <Tag colors={colors} icon="Flag" label={t(`risk.tag.${step.risk}`)} color={riskColor(colors, step.risk)} />;
+  if (step.notes.some((n) => n.kind === "decision"))
+    return <Tag colors={colors} icon="CircleHelp" label={t("flag.decide")} color={colors.statusWarning} />;
+  if (step.importance === "key") return <Tag colors={colors} label={t("flag.important")} color={colors.accent} />;
+  if (step.importance === "minor") return <Tag colors={colors} label={t("flag.minor")} />;
   return null;
-}
-
-function money(value: number): string {
-  return `${value < 0.01 ? value.toFixed(3) : value.toFixed(2)} $`.replace(".", ",");
 }
 
 export function Overview(props: {
@@ -42,13 +70,16 @@ export function Overview(props: {
   onToggleCheck: (id: string) => void;
 }) {
   const { colors, compact, walkthrough: w, progress } = props;
+  const { t, locale } = useTranslation(messages);
   const read = new Set(progress.read);
   const checked = new Set(progress.checked);
   const resume = resumeStep(w, progress);
   const readCount = w.steps.filter((s) => read.has(s.id)).length;
   const gap = 10;
 
-  const meta = [w.modelLabel, timeAgo(w.generatedAt), w.costUsd !== null ? money(w.costUsd) : null].filter(Boolean).join(" · ");
+  const meta = [w.modelLabel, timeAgo(t, w.generatedAt), w.costUsd !== null ? formatMoney(locale, w.costUsd) : null]
+    .filter(Boolean)
+    .join(" · ");
 
   const screenCols = Math.max(1, Math.floor((props.width + gap) / ((compact ? 160 : 230) + gap)));
   const screenWidth = Math.floor((props.width - gap * (screenCols - 1)) / screenCols);
@@ -57,59 +88,62 @@ export function Overview(props: {
 
   const stepLink = (n: number | null) =>
     n !== null && w.steps[n - 1] ? (
-      <LinkText colors={colors} label={`Étape ${n} →`} onPress={() => props.onOpen(w.steps[n - 1].id)} />
+      <LinkText colors={colors} label={t("overview.stepLink", { step: n })} onPress={() => props.onOpen(w.steps[n - 1].id)} />
     ) : null;
 
   const capturesPending = w.captures.state === "pending";
-  const captureIssue = !capturesPending && w.captures.note && w.screens.length > 0;
+  const captureNote = captureText(t, w.captures);
+  const captureIssue = !capturesPending && captureNote && w.screens.length > 0;
 
   return (
     <View style={{ gap: compact ? 20 : 26 }}>
       {/* Title */}
       <View style={{ gap: 10 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-          <Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>Vue d'ensemble</Text>
+          <Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>{t("overview.title")}</Text>
           <ProgressBar colors={colors} value={w.steps.length ? readCount / w.steps.length : 0} />
           <Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>
-            {readCount} sur {w.steps.length} vues
+            {t("overview.seen", { read: readCount, total: w.steps.length })}
           </Text>
         </View>
         <Text style={{ color: colors.foreground, fontSize: compact ? 20 : 24, fontWeight: "700" }}>{w.title}</Text>
         {w.pitch ? <Text style={{ color: colors.foreground, fontSize: compact ? 15 : 16, lineHeight: compact ? 21 : 23 }}>{w.pitch}</Text> : null}
-        <Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>{w.scopeLabel}</Text>
+        <Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>
+          {w.scopeInfo ? describeScope(t, w.scopeInfo) : w.scopeLabel}
+        </Text>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           {resume ? (
             <Button
               colors={colors}
               variant="primary"
               small
-              label={readCount === 0 ? "Commencer la visite →" : `Reprendre à l'étape ${w.steps.indexOf(resume) + 1} →`}
+              label={readCount === 0 ? t("overview.start") : t("overview.resume", { step: w.steps.indexOf(resume) + 1 })}
               onPress={() => props.onOpen(resume.id)}
             />
           ) : (
-            <Button colors={colors} small icon="CheckCheck" label="Tout est vu · revoir l'étape 1" onPress={() => props.onOpen(w.steps[0].id)} />
+            <Button colors={colors} small icon="CheckCheck" label={t("overview.allSeen")} onPress={() => props.onOpen(w.steps[0].id)} />
           )}
           <Text style={{ color: colors.foregroundMuted, fontSize: 11.5 }}>{meta}</Text>
         </View>
         {props.stale ? (
-          <Banner colors={colors} tint={colors.statusWarning} icon="TriangleAlert" text="Le code a changé depuis ce walkthrough.">
-            <Button colors={colors} small label="Régénérer" icon="RefreshCw" disabled={props.busy} onPress={props.onRegenerate} />
+          <Banner colors={colors} tint={colors.statusWarning} icon="TriangleAlert" text={t("overview.stale")}>
+            <Button colors={colors} small label={t("panel.regenerate")} icon="RefreshCw" disabled={props.busy} onPress={props.onRegenerate} />
           </Banner>
         ) : null}
         {captureIssue ? (
-          <Banner colors={colors} tint={w.captures.state === "failed" ? colors.statusDanger : colors.statusWarning} icon="Camera" text={w.captures.note!}>
-            <Button colors={colors} small label="Refaire les captures" icon="Camera" disabled={props.busy} onPress={props.onRecapture} />
+          <Banner colors={colors} tint={w.captures.state === "failed" ? colors.statusDanger : colors.statusWarning} icon="Camera" text={captureNote}>
+            <Button colors={colors} small label={t("overview.recapture")} icon="Camera" disabled={props.busy} onPress={props.onRecapture} />
           </Banner>
         ) : null}
       </View>
 
       {/* Summary */}
       <View style={{ gap: 8 }}>
-        <SectionLabel colors={colors}>En bref</SectionLabel>
+        <SectionLabel colors={colors}>{t("overview.summary")}</SectionLabel>
         <Markdown>{w.summary}</Markdown>
         {w.audience.length ? (
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-            <Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>Concerne :</Text>
+            <Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>{t("overview.audience")}</Text>
             {w.audience.map((a) => (
               <Chip key={a} colors={colors} label={a} />
             ))}
@@ -122,14 +156,14 @@ export function Overview(props: {
         <View style={{ flexDirection: compact ? "column" : "row", gap: 12 }}>
           {w.stakes.length ? (
             <View style={{ flex: 1, gap: 10, padding: 14, borderRadius: 10, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface1 }}>
-              <SectionLabel colors={colors}>Enjeux</SectionLabel>
+              <SectionLabel colors={colors}>{t("overview.stakes")}</SectionLabel>
               {w.stakes.map((stake, i) => (
                 <View key={i} style={{ flexDirection: "row", gap: 10, alignItems: "flex-start" }}>
                   <View style={{ width: 26, height: 26, borderRadius: 7, alignItems: "center", justifyContent: "center", backgroundColor: alpha(colors.accent, 0.12) }}>
-                    <Icon name={STAKE_META[stake.kind].icon} size={14} color={colors.accent} />
+                    <Icon name={STAKE_ICON[stake.kind]} size={14} color={colors.accent} />
                   </View>
                   <View style={{ flex: 1, gap: 1 }}>
-                    <Text style={{ color: colors.foregroundMuted, fontSize: 11, fontWeight: "600" }}>{STAKE_META[stake.kind].label}</Text>
+                    <Text style={{ color: colors.foregroundMuted, fontSize: 11, fontWeight: "600" }}>{t(`stake.${stake.kind}`)}</Text>
                     <Text style={{ color: colors.foreground, fontSize: 13, lineHeight: 19 }}>{stake.text}</Text>
                   </View>
                 </View>
@@ -140,19 +174,19 @@ export function Overview(props: {
             <View style={{ flex: 1, gap: 10, padding: 14, borderRadius: 10, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface1 }}>
               <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
                 <Text style={{ color: impactColor(colors, w.review.impact), fontSize: 26, fontWeight: "700" }}>
-                  {w.review.impact.toFixed(1).replace(".", ",")}
+                  {formatScore(locale, w.review.impact)}
                 </Text>
                 <Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>/10</Text>
-                <Text style={{ color: colors.foregroundMuted, fontSize: 10.5, fontWeight: "700", letterSpacing: 1, marginLeft: 4 }}>IMPACT</Text>
+                <Text style={{ color: colors.foregroundMuted, fontSize: 10.5, fontWeight: "700", letterSpacing: 1, marginLeft: 4 }}>{t("overview.impact")}</Text>
               </View>
               <Text style={{ color: colors.foreground, fontSize: 13, lineHeight: 19 }}>{w.review.reason}</Text>
               {w.review.risks.length ? (
                 <View style={{ gap: 8 }}>
-                  <SectionLabel colors={colors}>{`Ce qui peut mal tourner · ${w.review.risks.length}`}</SectionLabel>
+                  <SectionLabel colors={colors}>{t("overview.risks", { count: w.review.risks.length })}</SectionLabel>
                   {w.review.risks.map((risk, i) => (
                     <View key={i} style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
                       <View style={{ width: 58 }}>
-                        <Tag colors={colors} label={RISK_LABEL[risk.level].toUpperCase()} color={riskColor(colors, risk.level)} />
+                        <Tag colors={colors} label={t(`risk.${risk.level}`).toUpperCase()} color={riskColor(colors, risk.level)} />
                       </View>
                       <View style={{ flex: 1, gap: 2 }}>
                         <Text style={{ color: colors.foreground, fontSize: 12.5, lineHeight: 18 }}>{risk.text}</Text>
@@ -170,13 +204,13 @@ export function Overview(props: {
       {/* Screens */}
       {w.screens.length ? (
         <View style={{ gap: 10 }}>
-          <SectionLabel colors={colors}>{`Écrans touchés · ${w.screens.length}`}</SectionLabel>
+          <SectionLabel colors={colors}>{t("overview.screens", { count: w.screens.length })}</SectionLabel>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap }}>
             {w.screens.map((screen) => (
               <Pressable
                 key={screen.route}
                 accessibilityRole="button"
-                accessibilityLabel={`Écran ${screen.title}`}
+                accessibilityLabel={t("overview.screenLabel", { title: screen.title })}
                 onPress={() => props.onOpen(`screen:${screen.route}`)}
                 style={({ hovered }: PressState) => ({
                   width: screenWidth,
@@ -190,7 +224,7 @@ export function Overview(props: {
                 <ShotThumb colors={colors} cwd={props.cwd} screen={screen} height={compact ? 110 : 140} pending={capturesPending && props.capturing} />
                 <View style={{ padding: 10, gap: 4, borderTopWidth: 1, borderTopColor: colors.border }}>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                    <Tag colors={colors} label={STATUS_LABEL[screen.status]} color={statusColor(colors, screen.status)} />
+                    <Tag colors={colors} label={statusLabel(t, screen.status)} color={statusColor(colors, screen.status)} />
                     {screen.login ? <Icon name="Lock" size={11} color={colors.foregroundMuted} /> : null}
                   </View>
                   <Text numberOfLines={1} style={{ color: colors.foreground, fontSize: 13, fontWeight: "600" }}>
@@ -208,7 +242,7 @@ export function Overview(props: {
 
       {/* Steps */}
       <View style={{ gap: 10 }}>
-        <SectionLabel colors={colors}>{`La visite · ${plural(w.steps.length, "étape", "étapes")}`}</SectionLabel>
+        <SectionLabel colors={colors}>{t("overview.tour", { count: w.steps.length })}</SectionLabel>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap }}>
           {w.steps.map((step, index) => {
             const isRead = read.has(step.id);
@@ -217,7 +251,7 @@ export function Overview(props: {
               <Pressable
                 key={step.id}
                 accessibilityRole="button"
-                accessibilityLabel={`Étape ${index + 1} : ${step.title}${isRead ? ", vue" : ""}`}
+                accessibilityLabel={t(isRead ? "overview.stepLabelSeen" : "overview.stepLabel", { step: index + 1, title: step.title })}
                 onPress={() => props.onOpen(step.id)}
                 style={({ hovered, pressed }: PressState) => ({
                   width: stepWidth,
@@ -234,10 +268,10 @@ export function Overview(props: {
                 <View style={{ gap: 4 }}>
                   <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
                     <Text style={{ color: colors.foregroundMuted, fontSize: 11 }}>
-                      {index + 1} · {step.group}
+                      {index + 1} · {step.group || t("overview.ungrouped")}
                     </Text>
                     {isResume ? (
-                      <Text style={{ color: colors.accent, fontSize: 10.5, fontWeight: "700" }}>Reprendre ici</Text>
+                      <Text style={{ color: colors.accent, fontSize: 10.5, fontWeight: "700" }}>{t("overview.resumeHere")}</Text>
                     ) : isRead ? (
                       <Icon name="Check" size={13} color={colors.statusSuccess} />
                     ) : null}
@@ -256,7 +290,9 @@ export function Overview(props: {
                 </View>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                   {step.screens.length ? (
-                    <Text style={{ color: colors.foregroundMuted, fontSize: 11 }}>{plural(step.screens.length, "écran", "écrans")}</Text>
+                    <Text style={{ color: colors.foregroundMuted, fontSize: 11 }}>
+                      {t("overview.screenCount", { count: step.screens.length })}
+                    </Text>
                   ) : null}
                   <StepFlag colors={colors} step={step} />
                 </View>
@@ -269,7 +305,7 @@ export function Overview(props: {
       {/* Checks */}
       {w.checks.length ? (
         <View style={{ gap: 10 }}>
-          <SectionLabel colors={colors}>{`À vérifier avant de livrer · ${checked.size}/${w.checks.length}`}</SectionLabel>
+          <SectionLabel colors={colors}>{t("overview.checks", { done: checked.size, total: w.checks.length })}</SectionLabel>
           <Checklist colors={colors} walkthrough={w} checked={checked} onToggle={props.onToggleCheck} onOpen={props.onOpen} />
         </View>
       ) : null}

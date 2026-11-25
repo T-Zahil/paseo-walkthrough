@@ -25,7 +25,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(getWalkthrough, async ({ cwd, scope }, { paseo }) => {
     const job = generatorFor(paseo).job(cwd, scope);
     if (!(await isGitRepo(cwd))) {
-      return { git: false, scopeLabel: "", hasChanges: false, walkthrough: null, stale: false, progress: { read: [], last: null, checked: [] }, job };
+      return { git: false, scope: null, hasChanges: false, walkthrough: null, stale: false, progress: { read: [], last: null, checked: [] }, job };
     }
     const resolved = await resolveScope(cwd, scope);
     const diff = await readDiff(cwd, resolved);
@@ -33,7 +33,7 @@ export default function contribute(server: PluginServerContext) {
     const progress = await loadProgress(cwd, scope, walkthrough?.generatedAt ?? null);
     return {
       git: true,
-      scopeLabel: resolved.label,
+      scope: resolved.info,
       hasChanges: diff.files.length > 0,
       walkthrough,
       stale: walkthrough ? walkthrough.fingerprint !== diff.fingerprint : false,
@@ -42,10 +42,10 @@ export default function contribute(server: PluginServerContext) {
     };
   });
 
-  server.handle(startWalkthrough, async ({ cwd, scope, workspaceId, capturesOnly }, { paseo }) => {
+  server.handle(startWalkthrough, async ({ cwd, scope, workspaceId, capturesOnly, locale }, { paseo }) => {
     const current = await settings.read();
     const values = current.status === "ready" ? current.values : DEFAULTS;
-    generatorFor(paseo).start({ cwd, scope, workspaceId, settings: values, capturesOnly });
+    generatorFor(paseo).start({ cwd, scope, workspaceId, settings: values, capturesOnly, locale });
     return { ok: true };
   });
 

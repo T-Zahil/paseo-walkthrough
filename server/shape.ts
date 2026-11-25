@@ -121,6 +121,23 @@ export function normalizeAnswer(input: unknown): unknown {
   };
 }
 
+const REQUIRED_ROOT = ["title", "pitch", "summary", "screens", "steps", "checks"] as const;
+const REQUIRED_STEP = ["title", "explanation", "screens", "notes"] as const;
+
+/**
+ * Field names the answer leaves out. Normalization forgives near-miss enum values, not missing
+ * fields: an answer written against another shape would otherwise parse into an empty tour.
+ */
+export function missingFields(input: unknown): string[] {
+  const root = record(input);
+  const missing: string[] = REQUIRED_ROOT.filter((key) => !(key in root));
+  list(root.steps).forEach((raw, index) => {
+    const step = record(raw);
+    for (const key of REQUIRED_STEP) if (!(key in step)) missing.push(`steps[${index}].${key}`);
+  });
+  return missing;
+}
+
 /** Pulls the JSON object out of an agent answer, tolerating a Markdown fence or stray prose. */
 export function parseAnswer(answer: string): { ok: true; value: RawWalkthrough } | { ok: false; error: string } {
   let body = answer.trim();
@@ -137,6 +154,11 @@ export function parseAnswer(answer: string): { ok: true; value: RawWalkthrough }
     json = JSON.parse(body);
   } catch (error) {
     return { ok: false, error: `invalid JSON (${(error as Error).message})` };
+  }
+  const missing = missingFields(json);
+  if (missing.length) {
+    const shown = missing.slice(0, 8).join(", ");
+    return { ok: false, error: `missing fields: ${shown}${missing.length > 8 ? ", …" : ""}` };
   }
   const parsed = RawSchema.safeParse(normalizeAnswer(json));
   if (!parsed.success) {
@@ -210,7 +232,7 @@ export function shapeWalkthrough(input: {
     const stepNumber = index + 1;
     return {
       id: `s${stepNumber}`,
-      group: rawStep.group.trim() || "Changements",
+      group: rawStep.group.trim(),
       title: rawStep.title.trim(),
       explanation: rawStep.explanation.trim(),
       importance: rawStep.importance,
@@ -236,6 +258,7 @@ export function shapeWalkthrough(input: {
     version: 2,
     scope: resolved.scope,
     scopeLabel: resolved.label,
+    scopeInfo: resolved.info,
     base: resolved.base,
     branch: resolved.branch,
     headSha: resolved.headSha,
@@ -259,7 +282,8 @@ export function shapeWalkthrough(input: {
     review,
     captures: {
       state: !input.captures ? "skipped" : screens.length ? "pending" : "skipped",
-      note: !input.captures ? "Captures désactivées dans les réglages." : screens.length ? null : "Aucun écran à capturer.",
+      reason: !input.captures ? "disabled" : screens.length ? null : "no-screens",
+      note: null,
       anonymous: false,
     },
     totals: {

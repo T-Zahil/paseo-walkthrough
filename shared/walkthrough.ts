@@ -10,8 +10,8 @@ export const ScopeKind = z.enum(scopeKinds);
 export type ScopeKind = z.infer<typeof ScopeKind>;
 
 export const LANGUAGES = [
-  "Français",
   "English",
+  "Français",
   "Español",
   "Deutsch",
   "Italiano",
@@ -24,7 +24,43 @@ export const LANGUAGES = [
   "日本語",
   "한국어",
   "中文",
+  "العربية",
 ] as const;
+
+// App locales (and their base languages) mapped to the language name given to the agent.
+const LOCALE_LANGUAGES: Record<string, (typeof LANGUAGES)[number]> = {
+  en: "English",
+  fr: "Français",
+  es: "Español",
+  de: "Deutsch",
+  it: "Italiano",
+  pt: "Português",
+  nl: "Nederlands",
+  pl: "Polski",
+  sv: "Svenska",
+  tr: "Türkçe",
+  ru: "Русский",
+  ja: "日本語",
+  ko: "한국어",
+  zh: "中文",
+  ar: "العربية",
+};
+
+/** The language a walkthrough is written in: the setting when set, else the app's language. */
+export function walkthroughLanguage(setting: string, locale: string | undefined): string {
+  if (setting.trim()) return setting.trim();
+  const base = (locale ?? "").split("-")[0].toLowerCase();
+  return LOCALE_LANGUAGES[locale ?? ""] ?? LOCALE_LANGUAGES[base] ?? "English";
+}
+
+/** What a scope covers, as data: the client words it in the app's language. */
+export const ScopeInfo = z.object({
+  kind: z.enum(["branch", "uncommitted", "last-commit", "empty-repo", "no-base"]),
+  branch: z.string().nullable(),
+  baseRef: z.string().nullable(),
+  commit: z.string().nullable(),
+});
+export type ScopeInfo = z.infer<typeof ScopeInfo>;
 
 // ---------------------------------------------------------------------------
 // What the generating agent returns. Every field is required (nullable where
@@ -143,8 +179,23 @@ export const Review = z.object({
 });
 export type Review = z.infer<typeof Review>;
 
+export const CaptureReason = z.enum([
+  "disabled",
+  "no-screens",
+  "no-capture-command",
+  "no-dev-command",
+  "none-captured",
+  "signed-out",
+  "cancelled",
+  "error",
+]);
+export type CaptureReason = z.infer<typeof CaptureReason>;
+
 export const Captures = z.object({
   state: z.enum(["pending", "done", "skipped", "failed"]),
+  /** Why the screenshots are missing or incomplete; null when there is nothing to say. */
+  reason: CaptureReason.nullable().optional(),
+  /** Raw detail (command output, error message), shown as is after the reason. */
   note: z.string().nullable(),
   anonymous: z.boolean(),
 });
@@ -154,6 +205,7 @@ export const Walkthrough = z.object({
   version: z.literal(2),
   scope: ScopeKind,
   scopeLabel: z.string(),
+  scopeInfo: ScopeInfo.optional(),
   base: z.string(),
   branch: z.string().nullable(),
   headSha: z.string(),
@@ -185,10 +237,30 @@ export const Progress = z.object({
 });
 export type Progress = z.infer<typeof Progress>;
 
+export const PhaseKey = z.enum([
+  "reading",
+  "agentReading",
+  "repairing",
+  "shaping",
+  "startingSite",
+  "warming",
+  "capturing",
+  "processingShots",
+]);
+export type PhaseKey = z.infer<typeof PhaseKey>;
+
+export const Phase = z.object({
+  key: PhaseKey,
+  model: z.string().optional(),
+  count: z.number().optional(),
+  index: z.number().optional(),
+});
+export type Phase = z.infer<typeof Phase>;
+
 export const Job = z.object({
   state: z.enum(["running", "error"]),
   startedAt: z.string(),
-  phase: z.string(),
+  phase: Phase,
   error: z.string().nullable(),
   agentId: z.string().nullable(),
 });
@@ -205,7 +277,8 @@ export const settingsDefinition = defineSettings({
   schema: z.object({
     review: z.boolean().default(true),
     provider: z.string().default(""),
-    language: z.string().default("Français"),
+    /** Empty: the language of the app that starts the walkthrough. */
+    language: z.string().default(""),
     defaultScope: ScopeKind.default("branch"),
     instructions: z.string().default(""),
     captures: z.boolean().default(true),
@@ -226,7 +299,7 @@ export const getWalkthrough = defineRpc({
   input: z.object(target),
   output: z.object({
     git: z.boolean(),
-    scopeLabel: z.string(),
+    scope: ScopeInfo.nullable(),
     hasChanges: z.boolean(),
     walkthrough: Walkthrough.nullable(),
     stale: z.boolean(),
@@ -237,7 +310,13 @@ export const getWalkthrough = defineRpc({
 
 export const startWalkthrough = defineRpc({
   name: "walkthrough.start",
-  input: z.object({ ...target, workspaceId: z.string(), capturesOnly: z.boolean().optional() }),
+  input: z.object({
+    ...target,
+    workspaceId: z.string(),
+    capturesOnly: z.boolean().optional(),
+    /** The app's language, used when the language setting is empty. */
+    locale: z.string().optional(),
+  }),
   output: z.object({ ok: z.boolean() }),
 });
 
@@ -267,15 +346,3 @@ export const listModels = defineRpc({
     fallback: z.string().nullable(),
   }),
 });
-
-export const SCOPE_SHORT_TITLES: Record<ScopeKind, string> = {
-  branch: "Branche",
-  uncommitted: "Non commité",
-  "last-commit": "Dernier commit",
-};
-
-export const SCOPE_TITLES: Record<ScopeKind, string> = {
-  branch: "Cette branche",
-  uncommitted: "Modifs non commitées",
-  "last-commit": "Dernier commit",
-};

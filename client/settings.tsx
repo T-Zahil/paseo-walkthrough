@@ -1,4 +1,4 @@
-import { type PluginSurfaceProps, useRpc, useSettings } from "@getpaseo/plugin/client";
+import { type PluginSurfaceProps, useRpc, useSettings, useTranslation } from "@getpaseo/plugin/client";
 import {
   SettingsCard,
   SettingsInput,
@@ -10,9 +10,12 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Text } from "react-native";
-import { LANGUAGES, listModels, SCOPE_TITLES, scopeKinds, settingsDefinition, type WalkthroughSettings } from "../shared/walkthrough";
+import { LANGUAGES, listModels, scopeKinds, settingsDefinition, type WalkthroughSettings } from "../shared/walkthrough";
+import { messages } from "./messages";
+import { scopeTitle } from "./scope";
 
 export function SettingsScreen({ theme }: PluginSurfaceProps) {
+  const { t } = useTranslation(messages);
   const settings = useSettings(settingsDefinition);
   const models = useRpc(listModels);
   const catalog = useQuery({ queryKey: ["walkthrough-models"], queryFn: () => models({}) });
@@ -26,7 +29,7 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
   }, [ready]);
 
   if (settings.status !== "ready") {
-    return <Text style={{ color: theme.colors.foregroundMuted }}>{settings.status === "loading" ? "Chargement…" : "Réglages illisibles."}</Text>;
+    return <Text style={{ color: theme.colors.foregroundMuted }}>{settings.status === "loading" ? t("settings.loading") : t("settings.unreadable")}</Text>;
   }
   const values = settings.values;
   const save = (patch: Partial<WalkthroughSettings>) => void settings.save({ ...values, ...patch }, settings.revision);
@@ -34,88 +37,92 @@ export function SettingsScreen({ theme }: PluginSurfaceProps) {
   const fallback = catalog.data?.fallback;
   const fallbackLabel = catalog.data?.options.find((o) => o.value === fallback)?.label;
   const modelOptions = [
-    { value: "", label: fallbackLabel ? `Par défaut (${fallbackLabel})` : "Par défaut" },
+    { value: "", label: fallbackLabel ? t("settings.defaultWith", { label: fallbackLabel }) : t("settings.default") },
     ...(catalog.data?.options ?? []),
   ];
   if (values.provider && !modelOptions.some((o) => o.value === values.provider)) {
-    modelOptions.push({ value: values.provider, label: `${values.provider} (indisponible)` });
+    modelOptions.push({ value: values.provider, label: t("settings.unavailable", { value: values.provider }) });
+  }
+  const languageOptions = [{ value: "", label: t("settings.appLanguage") }, ...LANGUAGES.map((l) => ({ value: l, label: l }))];
+  if (values.language && !languageOptions.some((o) => o.value === values.language)) {
+    languageOptions.push({ value: values.language, label: values.language });
   }
 
   return (
     <>
-      <SettingsSection title="Génération">
+      <SettingsSection title={t("settings.generation")}>
         <SettingsCard>
           <SettingsSwitch
-            label="Review"
-            hint="Score d'impact business et ce qui peut mal tourner"
+            label={t("settings.review")}
+            hint={t("settings.reviewHint")}
             value={values.review}
             onValueChange={(review) => save({ review })}
           />
           <SettingsSelect
-            label="Agent et modèle"
-            hint={catalog.isLoading ? "Lecture des providers…" : "N'importe quel agent activé dans Paseo"}
+            label={t("settings.agent")}
+            hint={catalog.isLoading ? t("settings.agentLoading") : t("settings.agentHint")}
             value={values.provider}
             options={modelOptions}
             onValueChange={(provider) => save({ provider })}
           />
           <SettingsSelect
-            label="Langue"
-            hint={`${LANGUAGES.length} langues`}
+            label={t("settings.language")}
+            hint={t("settings.languageHint")}
             value={values.language}
-            options={LANGUAGES.map((l) => ({ value: l, label: l }))}
+            options={languageOptions}
             onValueChange={(language) => save({ language })}
           />
           <SettingsSelect
-            label="Portée par défaut"
-            hint="Ce que le panneau explique quand il s'ouvre"
+            label={t("settings.defaultScope")}
+            hint={t("settings.defaultScopeHint")}
             value={values.defaultScope}
-            options={scopeKinds.map((k) => ({ value: k, label: SCOPE_TITLES[k] }))}
+            options={scopeKinds.map((k) => ({ value: k, label: scopeTitle(t, k) }))}
             onValueChange={(defaultScope) => save({ defaultScope: defaultScope as WalkthroughSettings["defaultScope"] })}
           />
         </SettingsCard>
       </SettingsSection>
-      <SettingsSection title="Captures d'écran">
+      <SettingsSection title={t("settings.captures")}>
         <SettingsCard>
           <SettingsSwitch
-            label="Capturer les écrans touchés"
-            hint="Lance le site du worktree et photographie chaque écran modifié, en ordinateur et en mobile"
+            label={t("settings.capturesSwitch")}
+            hint={t("settings.capturesHint")}
             value={values.captures}
             onValueChange={(captures) => save({ captures })}
           />
           <SettingsInput
-            label="Commande du serveur de dev"
-            hint="Vide : détectée depuis package.json. {port} est remplacé par un port libre."
+            label={t("settings.devCommand")}
+            hint={t("settings.devCommandHint")}
             initialValue={values.devCommand}
-            placeholder="bun run dev --port {port}"
+            placeholder="npm run dev -- --port {port}"
             onChangeText={(text) => setCommands((c) => ({ ...c, devCommand: text }))}
           />
           <SettingsInput
-            label="Commande de capture"
-            hint="Vide : scripts/qa-screenshots.ts s'il existe. Variables : {routes}, {out}, {baseUrl}."
+            label={t("settings.captureCommand")}
+            hint={t("settings.captureCommandHint")}
             initialValue={values.captureCommand}
-            placeholder="bun run scripts/qa-screenshots.ts --routes {routes} --out {out} --base-url {baseUrl}"
+            placeholder="node scripts/screenshots.mjs --routes {routes} --out {out} --base-url {baseUrl}"
             onChangeText={(text) => setCommands((c) => ({ ...c, captureCommand: text }))}
           />
           <SettingsAction
-            label="Enregistrer les commandes"
-            actionLabel="Enregistrer"
+            label={t("settings.saveCommands")}
+            actionLabel={t("settings.save")}
             disabled={commands.devCommand === values.devCommand && commands.captureCommand === values.captureCommand}
             onPress={() => save(commands)}
           />
         </SettingsCard>
       </SettingsSection>
-      <SettingsSection title="Consignes en plus">
+      <SettingsSection title={t("settings.instructions")}>
         <SettingsCard>
           <SettingsInput
-            label="Pour l'agent qui écrit la visite"
-            hint="Par exemple : insiste sur l'impact sur les membres Pro, ignore les traductions"
+            label={t("settings.instructionsLabel")}
+            hint={t("settings.instructionsHint")}
             initialValue={values.instructions}
-            placeholder="Aucune"
+            placeholder={t("settings.instructionsPlaceholder")}
             onChangeText={setDraft}
           />
           <SettingsAction
-            label="Enregistrer les consignes"
-            actionLabel="Enregistrer"
+            label={t("settings.saveInstructions")}
+            actionLabel={t("settings.save")}
             disabled={draft === null || draft === values.instructions}
             onPress={() => {
               if (draft !== null) save({ instructions: draft });

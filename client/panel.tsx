@@ -3,6 +3,7 @@ import {
   useRpc,
   useSettings,
   useTabState,
+  useTranslation,
   useWorkspace,
 } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/ui";
@@ -13,9 +14,8 @@ import { z } from "zod";
 import {
   cancelWalkthrough,
   getWalkthrough,
+  type Phase,
   type Progress,
-  SCOPE_SHORT_TITLES,
-  SCOPE_TITLES,
   ScopeKind,
   scopeKinds,
   setProgress,
@@ -25,8 +25,10 @@ import {
 } from "../shared/walkthrough";
 import { AskBox } from "./ask";
 import { Button, IconButton, SectionLabel } from "./bits";
+import { messages, type T } from "./messages";
 import { Overview, resumeStep } from "./overview";
 import { openWalkthroughSettings } from "./runtime";
+import { describeScope, scopeTitle } from "./scope";
 import { ScreenView, StepHeader, StepView } from "./step";
 import { alpha, type Colors, type PressState, riskColor } from "./style";
 import { usePanelKeys } from "./web";
@@ -34,13 +36,28 @@ import { usePanelKeys } from "./web";
 const TabState = z.object({ scope: ScopeKind.nullable(), view: z.string() });
 const RAIL_MIN_WIDTH = 900;
 
-function elapsed(since: string, now: number): string {
+function elapsed(t: T, since: string, now: number): string {
   const seconds = Math.max(0, Math.round((now - new Date(since).getTime()) / 1000));
-  return seconds < 60 ? `${seconds} s` : `${Math.floor(seconds / 60)} min ${String(seconds % 60).padStart(2, "0")}`;
+  if (seconds < 60) return t("panel.seconds", { seconds });
+  return t("panel.minutes", { minutes: Math.floor(seconds / 60), seconds: String(seconds % 60).padStart(2, "0") });
+}
+
+function phaseText(t: T, phase: Phase): string {
+  switch (phase.key) {
+    case "agentReading":
+      return t("phase.agentReading", { model: phase.model ?? "", count: phase.count ?? 0 });
+    case "warming":
+      return t("phase.warming", { index: phase.index ?? 0, count: phase.count ?? 0 });
+    case "capturing":
+      return t("phase.capturing", { count: phase.count ?? 0 });
+    default:
+      return t(`phase.${phase.key}`);
+  }
 }
 
 function ScopePicker(props: { colors: Colors; value: ScopeKind; onChange: (scope: ScopeKind) => void; compact: boolean }) {
   const { colors } = props;
+  const { t } = useTranslation(messages);
   return (
     <View style={{ flexDirection: "row", padding: 2, gap: 2, borderRadius: 8, backgroundColor: colors.surface1, borderWidth: 1, borderColor: colors.border, flexShrink: 1 }}>
       {scopeKinds.map((kind) => {
@@ -59,7 +76,7 @@ function ScopePicker(props: { colors: Colors; value: ScopeKind; onChange: (scope
             })}
           >
             <Text numberOfLines={1} style={{ color: active ? colors.foreground : colors.foregroundMuted, fontSize: 12, fontWeight: active ? "600" : "400" }}>
-              {(props.compact ? SCOPE_SHORT_TITLES : SCOPE_TITLES)[kind]}
+              {scopeTitle(t, kind, props.compact)}
             </Text>
           </Pressable>
         );
@@ -76,6 +93,7 @@ function Rail(props: {
   onOpen: (view: string) => void;
 }) {
   const { colors, walkthrough: w } = props;
+  const { t } = useTranslation(messages);
   const read = new Set(props.progress.read);
   const palette = [colors.accent, colors.statusSuccess, colors.statusWarning, colors.statusDanger, colors.foregroundMuted];
   const groups: { name: string; color: string; steps: { id: string; title: string; index: number; risk: Walkthrough["steps"][number]["risk"] }[] }[] = [];
@@ -110,14 +128,14 @@ function Rail(props: {
       {row("overview", props.view === "overview", () => props.onOpen("overview"), (
         <>
           <Icon name="LayoutGrid" size={13} color={props.view === "overview" ? colors.accent : colors.foregroundMuted} />
-          <Text style={{ color: colors.foreground, fontSize: 12.5, fontWeight: "600" }}>Vue d'ensemble</Text>
+          <Text style={{ color: colors.foreground, fontSize: 12.5, fontWeight: "600" }}>{t("panel.overview")}</Text>
         </>
       ))}
       {groups.map((group) => (
         <View key={group.name} style={{ gap: 2 }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 8, marginBottom: 2 }}>
             <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: group.color }} />
-            <SectionLabel colors={colors}>{group.name}</SectionLabel>
+            <SectionLabel colors={colors}>{group.name || t("overview.ungrouped")}</SectionLabel>
           </View>
           {group.steps.map((step) => {
             const isRead = read.has(step.id);
@@ -143,7 +161,7 @@ function Rail(props: {
       {w.screens.length ? (
         <View style={{ gap: 2 }}>
           <View style={{ paddingHorizontal: 8, marginBottom: 2 }}>
-            <SectionLabel colors={colors}>Écrans</SectionLabel>
+            <SectionLabel colors={colors}>{t("panel.screens")}</SectionLabel>
           </View>
           {w.screens.map((screen) =>
             row(`screen:${screen.route}`, props.view === `screen:${screen.route}`, () => props.onOpen(`screen:${screen.route}`), (
@@ -159,7 +177,10 @@ function Rail(props: {
       ) : null}
       {w.checks.length ? (
         <Text style={{ color: colors.foregroundMuted, fontSize: 11, paddingHorizontal: 8 }}>
-          À vérifier · {props.progress.checked.filter((id) => w.checks.some((c) => c.id === id)).length}/{w.checks.length}
+          {t("panel.checksProgress", {
+            done: props.progress.checked.filter((id) => w.checks.some((c) => c.id === id)).length,
+            total: w.checks.length,
+          })}
         </Text>
       ) : null}
     </ScrollView>
@@ -186,6 +207,7 @@ function Centered(props: { colors: Colors; icon: string; title: string; body?: s
 export function WalkthroughPanel({ theme, layout, workspaceId, tab, navigation }: PluginWorkspacePanelProps) {
   const colors = theme.colors;
   const compact = layout.compact;
+  const { t, locale } = useTranslation(messages);
   const workspace = useWorkspace(workspaceId, (w) => ({ directory: w.directory, branch: w.branch, projectKind: w.projectKind }));
   const settings = useSettings(settingsDefinition);
   const [tabState, setTabState] = useTabState(tab, TabState, { scope: null, view: "overview" });
@@ -217,11 +239,11 @@ export function WalkthroughPanel({ theme, layout, workspaceId, tab, navigation }
   }, [generatedAt, scope, data !== undefined]);
 
   const generate = useMutation({
-    mutationFn: () => start({ cwd, scope, workspaceId }),
+    mutationFn: () => start({ cwd, scope, workspaceId, locale }),
     onSettled: () => queryClient.invalidateQueries({ queryKey }),
   });
   const recapture = useMutation({
-    mutationFn: () => start({ cwd, scope, workspaceId, capturesOnly: true }),
+    mutationFn: () => start({ cwd, scope, workspaceId, capturesOnly: true, locale }),
     onSettled: () => queryClient.invalidateQueries({ queryKey }),
   });
   const stop = useMutation({
@@ -320,26 +342,31 @@ export function WalkthroughPanel({ theme, layout, workspaceId, tab, navigation }
   const modelLine = useMemo(() => {
     if (settings.status !== "ready") return "";
     const v = settings.values;
-    return [v.provider ? v.provider.split("/").pop() : "agent par défaut", v.language, v.review ? "avec review" : "sans review"].join(" · ");
-  }, [settings]);
+    return [
+      v.provider ? v.provider.split("/").pop() : t("panel.defaultAgent"),
+      v.language || t("panel.appLanguage"),
+      v.review ? t("panel.withReview") : t("panel.withoutReview"),
+    ].join(" · ");
+  }, [settings, t]);
+  const scopeText = data?.scope ? describeScope(t, data.scope) : scopeTitle(t, scope);
 
   let body: React.ReactNode;
   if (!workspace) {
     body = <ActivityIndicator color={colors.accent} style={{ marginTop: 40 }} />;
   } else if (workspace.projectKind !== "git" || data?.git === false) {
-    body = <Centered colors={colors} icon="FolderX" title="Pas de dépôt git" body="Le walkthrough explique un diff git. Ouvre-le dans un workspace qui est un dépôt ou un worktree." />;
+    body = <Centered colors={colors} icon="FolderX" title={t("panel.noGitTitle")} body={t("panel.noGitBody")} />;
   } else if (query.isLoading) {
     body = <ActivityIndicator color={colors.accent} style={{ marginTop: 40 }} />;
   } else if (query.isError) {
     body = (
-      <Centered colors={colors} icon="TriangleAlert" title="Lecture impossible" body={(query.error as Error)?.message}>
-        <Button colors={colors} small label="Réessayer" onPress={() => query.refetch()} />
+      <Centered colors={colors} icon="TriangleAlert" title={t("panel.readErrorTitle")} body={(query.error as Error)?.message}>
+        <Button colors={colors} small label={t("panel.retry")} onPress={() => query.refetch()} />
       </Centered>
     );
   } else if (!walkthrough && !running && job?.state !== "error") {
     body = data?.hasChanges ? (
-      <Centered colors={colors} icon="Route" title="Comprends ce que change cette branche" body={`${data.scopeLabel}. Un agent lit les changements et t'explique ce qui change pour les utilisateurs, les enjeux business et ce qui peut mal tourner, avec les écrans en vraies captures.`}>
-        <Button colors={colors} variant="primary" icon="Sparkles" label="Générer le walkthrough" disabled={generate.isPending} onPress={() => generate.mutate()} />
+      <Centered colors={colors} icon="Route" title={t("panel.readyTitle")} body={t("panel.readyBody", { scope: scopeText })}>
+        <Button colors={colors} variant="primary" icon="Sparkles" label={t("panel.generate")} disabled={generate.isPending} onPress={() => generate.mutate()} />
         <Pressable onPress={openWalkthroughSettings}>
           {({ hovered }: PressState) => (
             <Text style={{ color: colors.foregroundMuted, fontSize: 11.5, textDecorationLine: hovered ? "underline" : "none" }}>{modelLine}</Text>
@@ -347,7 +374,7 @@ export function WalkthroughPanel({ theme, layout, workspaceId, tab, navigation }
         </Pressable>
       </Centered>
     ) : (
-      <Centered colors={colors} icon="CircleCheck" title="Rien à expliquer" body={`Aucune modification pour cette portée (${data?.scopeLabel ?? SCOPE_TITLES[scope]}).`} />
+      <Centered colors={colors} icon="CircleCheck" title={t("panel.nothingTitle")} body={t("panel.nothingBody", { scope: scopeText })} />
     );
   } else {
     body = (
@@ -357,22 +384,26 @@ export function WalkthroughPanel({ theme, layout, workspaceId, tab, navigation }
             <ActivityIndicator color={colors.accent} />
             <View style={{ flex: 1, minWidth: 180, gap: 2 }}>
               <Text style={{ color: colors.foreground, fontSize: 13, fontWeight: "600" }}>
-                {walkthrough?.captures.state === "pending" ? "Captures des écrans en cours" : walkthrough ? "Nouveau walkthrough en cours" : "Walkthrough en cours"}
+                {walkthrough?.captures.state === "pending"
+                  ? t("panel.jobCapturing")
+                  : walkthrough
+                    ? t("panel.jobRegenerating")
+                    : t("panel.jobGenerating")}
               </Text>
               <Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>
-                {job.phase} · {elapsed(job.startedAt, now)}
+                {phaseText(t, job.phase)} · {elapsed(t, job.startedAt, now)}
               </Text>
             </View>
-            <Button colors={colors} small variant="ghost" label="Annuler" disabled={stop.isPending} onPress={() => stop.mutate()} />
+            <Button colors={colors} small variant="ghost" label={t("panel.cancel")} disabled={stop.isPending} onPress={() => stop.mutate()} />
           </View>
         ) : null}
         {job?.state === "error" ? (
           <View style={{ gap: 8, padding: 14, borderRadius: 10, borderWidth: 1, borderColor: alpha(colors.statusDanger, 0.4), backgroundColor: alpha(colors.statusDanger, 0.07) }}>
-            <Text style={{ color: colors.statusDanger, fontSize: 13, fontWeight: "600" }}>La génération a échoué</Text>
+            <Text style={{ color: colors.statusDanger, fontSize: 13, fontWeight: "600" }}>{t("panel.failed")}</Text>
             <Text selectable style={{ color: colors.foreground, fontSize: 12.5 }}>{job.error}</Text>
             <View style={{ flexDirection: "row", gap: 8 }}>
-              <Button colors={colors} small label="Réessayer" icon="RefreshCw" onPress={() => generate.mutate()} />
-              <Button colors={colors} small variant="ghost" label="Réglages" onPress={openWalkthroughSettings} />
+              <Button colors={colors} small label={t("panel.retry")} icon="RefreshCw" onPress={() => generate.mutate()} />
+              <Button colors={colors} small variant="ghost" label={t("panel.settingsShort")} onPress={openWalkthroughSettings} />
             </View>
           </View>
         ) : null}
@@ -451,9 +482,9 @@ export function WalkthroughPanel({ theme, layout, workspaceId, tab, navigation }
         <ScopePicker colors={colors} value={scope} onChange={setScope} compact={compact} />
         <View style={{ flex: 1 }} />
         {walkthrough ? (
-          <IconButton colors={colors} icon="RefreshCw" label="Régénérer" disabled={running || generate.isPending} onPress={() => generate.mutate()} />
+          <IconButton colors={colors} icon="RefreshCw" label={t("panel.regenerate")} disabled={running || generate.isPending} onPress={() => generate.mutate()} />
         ) : null}
-        <IconButton colors={colors} icon="Settings2" label="Réglages du walkthrough" onPress={openWalkthroughSettings} />
+        <IconButton colors={colors} icon="Settings2" label={t("panel.settings")} onPress={openWalkthroughSettings} />
       </View>
       {walkthrough && step ? (
         <View style={{ paddingHorizontal: pad, paddingTop: 10, paddingBottom: 6, borderBottomWidth: 1, borderBottomColor: colors.border }}>

@@ -1,9 +1,10 @@
-import { type AgentRef, useAgent, useAgents, usePaseo, useRpc, useSettings } from "@getpaseo/plugin/client";
+import { type AgentRef, useAgent, useAgents, usePaseo, useRpc, useSettings, useTranslation } from "@getpaseo/plugin/client";
 import { TextInput, useToast } from "@getpaseo/plugin/client/ui";
 import { useEffect, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { listModels, settingsDefinition, type Step, type Walkthrough } from "../shared/walkthrough";
 import { Button } from "./bits";
+import { messages } from "./messages";
 import { alpha, type Colors, type PressState } from "./style";
 
 export function stepBrief(walkthrough: Walkthrough, step: Step): string {
@@ -23,7 +24,7 @@ export function stepBrief(walkthrough: Walkthrough, step: Step): string {
     notes ? `\nNotes:\n${notes}` : "",
     screens ? `\nScreens:\n${screens}` : "",
     step.files.length ? `\nFiles behind it: ${step.files.join(", ")}` : "",
-    "\nI am the founder and I do not read code: answer in plain product terms unless I ask for code.",
+    "\nI do not read code: answer in plain product terms unless I ask for code.",
   ]
     .filter((part) => part !== "")
     .join("\n");
@@ -43,6 +44,7 @@ function slug(text: string): string {
 
 function AgentChip(props: { colors: Colors; agent: AgentRef; selected: boolean; onSelect: (id: string) => void }) {
   const { colors } = props;
+  const { t } = useTranslation(messages);
   const agent = useAgent(props.agent, (a) => ({ id: a.id, title: a.title, provider: a.provider, status: a.status }));
   if (!agent) return null;
   const busy = agent.status === "running";
@@ -68,7 +70,7 @@ function AgentChip(props: { colors: Colors; agent: AgentRef; selected: boolean; 
       <Text numberOfLines={1} style={{ color: colors.foreground, fontSize: 12, flexShrink: 1 }}>
         {agent.title || agent.provider}
       </Text>
-      <Text style={{ color: colors.foregroundMuted, fontSize: 11 }}>{busy ? "occupé" : "en attente"}</Text>
+      <Text style={{ color: colors.foregroundMuted, fontSize: 11 }}>{busy ? t("ask.busy") : t("ask.idle")}</Text>
     </Pressable>
   );
 }
@@ -83,6 +85,7 @@ export function AskBox(props: {
   openAgent?: (input: { agentId: string }) => void;
 }) {
   const { colors, walkthrough, step } = props;
+  const { t } = useTranslation(messages);
   const paseo = usePaseo();
   const toast = useToast();
   const settings = useSettings(settingsDefinition);
@@ -105,7 +108,7 @@ export function AskBox(props: {
 
   const index = walkthrough.steps.indexOf(step) + 1;
   const message = () => {
-    const ask = question.trim() || "Explain this step to me in more depth, from the user's point of view, and point out anything that looks wrong.";
+    const ask = question.trim() || t("ask.defaultQuestion");
     return `${ask}\n\n---\n${stepBrief(walkthrough, step)}`;
   };
 
@@ -116,9 +119,9 @@ export function AskBox(props: {
       await paseo.agents.ref(selected).send(message());
       setQuestion("");
       setSentTo(selected);
-      toast.show("Envoyé à l'agent", { variant: "success" });
+      toast.show(t("ask.sent"), { variant: "success" });
     } catch (error) {
-      toast.error(`Envoi impossible : ${(error as Error).message}`);
+      toast.error(t("ask.sendFailed", { error: (error as Error).message }));
     } finally {
       setPending(null);
     }
@@ -129,7 +132,8 @@ export function AskBox(props: {
     try {
       let provider = settings.status === "ready" ? settings.values.provider : "";
       if (!provider) provider = (await models({})).fallback ?? "";
-      if (!provider) throw new Error("aucun agent disponible");
+      if (!provider) throw new Error(t("ask.noAgent"));
+      const title = t("ask.sessionTitle", { step: index, title: step.title });
       const workspace = await paseo.workspaces.create({
         source: {
           kind: "worktree",
@@ -138,18 +142,18 @@ export function AskBox(props: {
           refName: props.branch ?? "HEAD",
           branchName: `walkthrough/step-${index}-${slug(step.title)}-${Date.now().toString(36).slice(-4)}`,
         },
-        title: `Étape ${index} · ${step.title}`,
+        title,
       } as never);
       const agent = await workspace.agents.create({
         config: { provider },
-        title: `Étape ${index} · ${step.title}`,
+        title,
         prompt: `${message()}\n\nYou are in a fresh worktree branched off ${props.branch ?? "HEAD"}. Uncommitted changes from the original worktree (${props.directory}) are not here.`,
       });
       setQuestion("");
-      toast.show("Nouvelle session lancée", { variant: "success" });
+      toast.show(t("ask.sessionStarted"), { variant: "success" });
       props.openAgent?.({ agentId: agent.id });
     } catch (error) {
-      toast.error(`Session impossible : ${(error as Error).message}`);
+      toast.error(t("ask.sessionFailed", { error: (error as Error).message }));
     } finally {
       setPending(null);
     }
@@ -157,11 +161,11 @@ export function AskBox(props: {
 
   return (
     <View style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 10, backgroundColor: colors.surface1, padding: 12, gap: 10 }}>
-      <Text style={{ color: colors.foreground, fontSize: 12.5, fontWeight: "600" }}>Demander à un agent sur cette étape</Text>
+      <Text style={{ color: colors.foreground, fontSize: 12.5, fontWeight: "600" }}>{t("ask.title")}</Text>
       <TextInput
         value={question}
         onChangeText={setQuestion}
-        placeholder="Pourquoi ce choix ? Et si l'utilisateur n'est pas connecté ?"
+        placeholder={t("ask.placeholder")}
         placeholderTextColor={colors.foregroundMuted}
         multiline
         style={{
@@ -184,7 +188,7 @@ export function AskBox(props: {
           ))}
         </View>
       ) : (
-        <Text style={{ color: colors.foregroundMuted, fontSize: 11.5 }}>Aucun agent ouvert dans ce workspace.</Text>
+        <Text style={{ color: colors.foregroundMuted, fontSize: 11.5 }}>{t("ask.noAgents")}</Text>
       )}
       <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <Button
@@ -192,7 +196,7 @@ export function AskBox(props: {
           small
           variant="primary"
           icon="Send"
-          label={pending === "send" ? "Envoi…" : "Envoyer"}
+          label={pending === "send" ? t("ask.sending") : t("ask.send")}
           disabled={!selected || pending !== null}
           onPress={send}
         />
@@ -200,17 +204,16 @@ export function AskBox(props: {
           colors={colors}
           small
           icon="GitBranchPlus"
-          label={pending === "session" ? "Création…" : "Nouvelle session"}
+          label={pending === "session" ? t("ask.creating") : t("ask.newSession")}
           disabled={pending !== null}
           onPress={newSession}
         />
         {sentTo && props.openAgent ? (
-          <Button colors={colors} small variant="ghost" label="Voir la réponse →" onPress={() => props.openAgent?.({ agentId: sentTo })} />
+          <Button colors={colors} small variant="ghost" label={t("ask.seeAnswer")} onPress={() => props.openAgent?.({ agentId: sentTo })} />
         ) : null}
       </View>
       <Text style={{ color: colors.foregroundMuted, fontSize: 11 }}>
-        Envoyé avec l'étape, son explication et l'emplacement du code. « Nouvelle session » crée un worktree depuis{" "}
-        {props.branch ?? "HEAD"} avec un agent déjà briefé.
+        {t("ask.hint", { branch: props.branch ?? "HEAD" })}
       </Text>
     </View>
   );
