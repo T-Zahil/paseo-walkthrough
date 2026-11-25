@@ -1,0 +1,9 @@
+{
+  "id": "paseo-walkthrough",
+  "media": [],
+  "requirements": {
+    "paseo": ">=0.17.0"
+  },
+  "name": "Walkthrough",
+  "description": "Comprends chaque changement comme un produit : ce qui change pour les utilisateurs, les enjeux business, les écrans en vraies captures et quoi vérifier."
+}
